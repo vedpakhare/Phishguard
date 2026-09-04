@@ -412,19 +412,39 @@
 
     <!-- HISTORY PANEL -->
     <div class="panel" id="historyPanel">
-        <p class="meta-line" style="margin-top:0;">Past investigations, stored locally on this machine.</p>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <p class="meta-line" style="margin-top:0;">Past investigations, stored locally on this machine.</p>
+            <span class="reset-link" style="margin-top:0;" onclick="clearAllHistory()">Clear all history</span>
+        </div>
         <ul class="evidence-log" id="historyList" style="margin-top:14px;"></ul>
     </div>
+
+    <p style="text-align:center; color: var(--text-muted); font-size: 12px; margin-top: 32px;">
+        PhishGuard uses automated pattern checks — like any tool, it can miss things. Stay cautious with sensitive information regardless of the verdict.
+    </p>
 
 <script>
     const API_BASE = "http://127.0.0.1:8000";
 
     const VERDICT_TEXT = {
-        LOW:      { glyph: "✓", headline: "This looks safe",      explanation: "No common warning signs found. Still worth a second look before entering passwords or personal info." },
+        LOW:      { glyph: "✓", headline: "This looks safe",      explanation: "No common phishing patterns were found on this link." },
         MEDIUM:   { glyph: "!", headline: "Be cautious",          explanation: "A couple of things stood out. It might be fine, but proceed carefully." },
         HIGH:     { glyph: "▲", headline: "This looks risky",     explanation: "Several warning signs were found. We'd avoid entering any personal information." },
         CRITICAL: { glyph: "✕", headline: "This looks dangerous", explanation: "Strong signs of phishing. We'd strongly recommend avoiding this." }
     };
+
+    const LOW_WITH_FLAGS = {
+        glyph: "✓",
+        headline: "Mostly looks safe",
+        explanation: "Nothing serious found, but one or two minor things were noted below \u2014 worth a quick look."
+    };
+
+    function getVerdictInfo(riskLevel, hasFlags) {
+        if (riskLevel === "LOW" && hasFlags) {
+            return LOW_WITH_FLAGS;
+        }
+        return VERDICT_TEXT[riskLevel];
+    }
 
     function switchTab(tab) {
         document.getElementById("urlPanel").classList.toggle("active", tab === "url");
@@ -462,15 +482,39 @@
             mark.textContent = item.type === "url" ? "\u2197" : "\u2709";
 
             const label = document.createElement("span");
+            label.className = "row-label";
             const when = new Date(item.created_at).toLocaleString();
             label.innerHTML = "<strong>[" + item.risk_level + "]</strong> " + item.target +
                 "  <span style=\"color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 11px;\">" + when + "</span>";
 
+            const deleteBtn = document.createElement("span");
+            deleteBtn.textContent = "\u2715";
+            deleteBtn.title = "Delete this entry";
+            deleteBtn.style.cssText = "cursor:pointer; color: var(--text-muted); flex-shrink:0; padding: 0 4px;";
+            deleteBtn.onclick = function () {
+                deleteHistoryItem(item.id);
+            };
+
             li.appendChild(mark);
             li.appendChild(label);
+            li.appendChild(deleteBtn);
             list.appendChild(li);
         });
     }
+
+    async function deleteHistoryItem(id) {
+        await fetch(API_BASE + "/api/investigations/" + id, { method: "DELETE" });
+        loadHistory();
+    }
+
+    async function clearAllHistory() {
+        if (!confirm("Delete all saved investigations? This can't be undone.")) {
+            return;
+        }
+        await fetch(API_BASE + "/api/investigations", { method: "DELETE" });
+        loadHistory();
+    }
+
 
     function toggleDetails(detailsId, linkId) {
         const details = document.getElementById(detailsId);
@@ -523,8 +567,12 @@
     // ---------- URL FLOW ----------
 
     async function investigateUrl() {
-        const url = document.getElementById("urlInput").value.trim();
+        let url = document.getElementById("urlInput").value.trim();
         if (!url) return;
+
+        if (!/^https?:\/\//i.test(url)) {
+            url = "https://" + url;
+        }
 
         setLoading("url", true);
         document.getElementById("resultBox").classList.remove("active");
@@ -548,7 +596,23 @@
         const banner = document.getElementById("verdictBanner");
         banner.className = "verdict-banner " + data.risk_level;
 
-        const info = VERDICT_TEXT[data.risk_level];
+        const findings = [
+            { label: "The address uses a raw number (IP address) instead of a normal web name.", flagged: data.hostname_is_ip },
+            { label: "The link contains words often used to trick people, like \u201clogin\u201d or \u201cverify\u201d.", flagged: data.has_suspicious_keywords },
+            { label: "The web address uses hidden character encoding that can disguise its real identity.", flagged: data.has_punycode },
+            {
+                label: data.brand_impersonation_type === "typosquat"
+                    ? "This address is a near-identical misspelling of the real site \u201c" + data.brand_impersonation_target + "\u201d \u2014 a classic impersonation trick."
+                    : data.brand_impersonation_type === "impersonation"
+                    ? "This address includes the name \u201c" + data.brand_impersonation_target + "\u201d but isn't that company's real site \u2014 a common way to look trustworthy at a glance."
+                    : "The address doesn't closely resemble any well-known brand we checked.",
+                flagged: data.brand_impersonation_type !== null
+            }
+        ];
+
+        const hasFlags = findings.some(function (f) { return f.flagged; });
+        const info = getVerdictInfo(data.risk_level, hasFlags);
+
         document.getElementById("verdictGlyph").textContent = info.glyph;
         document.getElementById("verdictHeadline").textContent = info.headline;
         document.getElementById("verdictExplanation").textContent = info.explanation;
@@ -556,17 +620,7 @@
         document.getElementById("rawScoreText").textContent =
             "risk_score: " + data.risk_score + "/100  ·  risk_level: " + data.risk_level;
 
-        fillFindingsList("findingsList", [
-            { label: "The address uses a raw number (IP address) instead of a normal web name.", flagged: data.hostname_is_ip },
-            { label: "The link contains words often used to trick people, like \u201clogin\u201d or \u201cverify\u201d.", flagged: data.has_suspicious_keywords },
-            { label: "The web address uses hidden character encoding that can disguise its real identity.", flagged: data.has_punycode },
-            {
-                label: data.typosquat_target
-                    ? "This address looks very similar to the real site \u201c" + data.typosquat_target + "\u201d \u2014 it may be an impersonation."
-                    : "The address doesn't closely resemble any well-known brand we checked.",
-                flagged: data.typosquat_target !== null
-            }
-        ], "No warning signs found on this link.");
+        fillFindingsList("findingsList", findings, "No warning signs found on this link.");
 
         document.getElementById("technicalDetails").style.display = "none";
         document.getElementById("toggleLink").textContent = "show technical details";
@@ -611,17 +665,21 @@
         const banner = document.getElementById("emailVerdictBanner");
         banner.className = "verdict-banner " + data.risk_level;
 
-        const info = VERDICT_TEXT[data.risk_level];
+        const findings = [
+            { label: "The reply address doesn't match the sender's real domain.", flagged: data.reply_to_mismatch },
+            { label: "This email failed checks that verify it really came from who it claims.", flagged: data.auth_failure }
+        ];
+        const hasFlags = findings.some(function (f) { return f.flagged; }) ||
+            data.urls.some(function (u) { return u.risk_level !== "LOW"; });
+        const info = getVerdictInfo(data.risk_level, hasFlags);
+
         document.getElementById("emailVerdictGlyph").textContent = info.glyph;
         document.getElementById("emailVerdictHeadline").textContent = info.headline;
         document.getElementById("emailVerdictExplanation").textContent = info.explanation;
         document.getElementById("emailFromText").textContent = data.from;
         document.getElementById("emailSubjectText").textContent = data.subject;
 
-        fillFindingsList("emailFindingsList", [
-            { label: "The reply address doesn't match the sender's real domain.", flagged: data.reply_to_mismatch },
-            { label: "This email failed checks that verify it really came from who it claims.", flagged: data.auth_failure }
-        ], "No warning signs found on the sender or authentication.");
+        fillFindingsList("emailFindingsList", findings, "No warning signs found on the sender or authentication.");
 
         const urlList = document.getElementById("emailUrlList");
         urlList.innerHTML = "";

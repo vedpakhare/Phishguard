@@ -10,7 +10,13 @@ import email
 from email import policy
 import sqlite3
 import json
+import tldextract
 from datetime import datetime
+
+# Use tldextract's bundled offline snapshot only — never fetch the public
+# suffix list over the network. A security tool shouldn't have a hidden
+# outbound network dependency just to parse a domain name.
+domain_extractor = tldextract.TLDExtract(suffix_list_urls=())
 
 app = FastAPI()
 
@@ -86,13 +92,7 @@ def get_recent_investigations(limit=50):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        """
-        SELECT id, type, target, risk_score, risk_level, created_at,
-               analyst_verdict, feedback_reason, feedback_at
-        FROM investigations
-        ORDER BY id DESC
-        LIMIT ?
-        """,
+        "SELECT id, type, target, risk_score, risk_level, created_at FROM investigations ORDER BY id DESC LIMIT ?",
         (limit,)
     )
     rows = cursor.fetchall()
@@ -104,38 +104,32 @@ def get_recent_investigations(limit=50):
 def list_investigations():
     return get_recent_investigations()
 
-VALID_VERDICTS = ["benign", "suspicious", "confirmed_phishing"]
-
-class FeedbackSubmission(BaseModel):
-    verdict: str
-    reason: str | None = None
-
-def save_feedback(investigation_id, verdict, reason):
+def delete_investigation(investigation_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE investigations
-        SET analyst_verdict = ?, feedback_reason = ?, feedback_at = ?
-        WHERE id = ?
-        """,
-        (verdict, reason, datetime.now().isoformat(), investigation_id)
-    )
+    cursor.execute("DELETE FROM investigations WHERE id = ?", (investigation_id,))
     conn.commit()
     rows_changed = cursor.rowcount
     conn.close()
     return rows_changed
 
-@app.post("/api/investigations/{investigation_id}/feedback")
-def submit_feedback(investigation_id: int, feedback: FeedbackSubmission):
-    if feedback.verdict not in VALID_VERDICTS:
-        return {"success": False, "error": "verdict must be one of: " + ", ".join(VALID_VERDICTS)}
+def delete_all_investigations():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM investigations")
+    conn.commit()
+    conn.close()
 
-    rows_changed = save_feedback(investigation_id, feedback.verdict, feedback.reason)
-
+@app.delete("/api/investigations/{investigation_id}")
+def remove_investigation(investigation_id: int):
+    rows_changed = delete_investigation(investigation_id)
     if rows_changed == 0:
         return {"success": False, "error": "No investigation found with that id."}
+    return {"success": True}
 
+@app.delete("/api/investigations")
+def clear_all_investigations():
+    delete_all_investigations()
     return {"success": True}
 
 # ---------------------------------------------------------
@@ -173,28 +167,115 @@ def has_punycode(hostname):
         return False
     return "xn--" in hostname.lower()
 
-KNOWN_BRANDS = ["paypal.com", "amazon.com", "google.com", "microsoft.com", "apple.com", "facebook.com"]
-
-def check_typosquatting(hostname):
+def get_registered_domain(hostname):
+    """
+    Returns the real, registrable domain — e.g. for 'accounts.paypal.com'
+    this returns 'paypal.com', ignoring subdomains. This matters because
+    comparing the raw hostname (with subdomains attached) against a brand
+    name gives wrong answers: 'www.paypal.com' is NOT close to 'paypal.com'
+    by naive edit distance, and 'paypal.evil.com' would be missed entirely
+    if we only looked at the end of the string.
+    """
     if hostname is None:
         return None
+    extracted = domain_extractor(hostname)
+    if not extracted.domain:
+        return None
+    if extracted.suffix:
+        return extracted.domain + "." + extracted.suffix
+    return extracted.domain
+
+# A larger, more realistic watchlist of commonly impersonated brands.
+# Each entry: display name, the real registered domain, and the "core name"
+# used for substring/brand-stuffing detection.
+KNOWN_BRANDS = [
+    {"name": "PayPal", "domain": "paypal.com", "core": "paypal"},
+    {"name": "Amazon", "domain": "amazon.com", "core": "amazon"},
+    {"name": "Google", "domain": "google.com", "core": "google"},
+    {"name": "Microsoft", "domain": "microsoft.com", "core": "microsoft"},
+    {"name": "Apple", "domain": "apple.com", "core": "apple"},
+    {"name": "Facebook", "domain": "facebook.com", "core": "facebook"},
+    {"name": "Instagram", "domain": "instagram.com", "core": "instagram"},
+    {"name": "Netflix", "domain": "netflix.com", "core": "netflix"},
+    {"name": "LinkedIn", "domain": "linkedin.com", "core": "linkedin"},
+    {"name": "Dropbox", "domain": "dropbox.com", "core": "dropbox"},
+    {"name": "Adobe", "domain": "adobe.com", "core": "adobe"},
+    {"name": "eBay", "domain": "ebay.com", "core": "ebay"},
+    {"name": "Chase Bank", "domain": "chase.com", "core": "chase"},
+    {"name": "Bank of America", "domain": "bankofamerica.com", "core": "bankofamerica"},
+    {"name": "Wells Fargo", "domain": "wellsfargo.com", "core": "wellsfargo"},
+    {"name": "American Express", "domain": "americanexpress.com", "core": "amex"},
+    {"name": "DHL", "domain": "dhl.com", "core": "dhl"},
+    {"name": "FedEx", "domain": "fedex.com", "core": "fedex"},
+    {"name": "UPS", "domain": "ups.com", "core": "ups"},
+    {"name": "USPS", "domain": "usps.com", "core": "usps"},
+    {"name": "Coinbase", "domain": "coinbase.com", "core": "coinbase"},
+    {"name": "Binance", "domain": "binance.com", "core": "binance"},
+    {"name": "Outlook / Microsoft 365", "domain": "outlook.com", "core": "outlook"},
+    {"name": "Steam", "domain": "steampowered.com", "core": "steam"},
+    {"name": "Spotify", "domain": "spotify.com", "core": "spotify"},
+]
+
+def check_brand_impersonation(hostname):
+    """
+    Checks a hostname against the brand watchlist two different ways:
+
+    1. Typosquat: the registered domain is a near-miss (1-2 character edit)
+       of a real brand's domain, e.g. "paypa1.com" vs "paypal.com".
+
+    2. Brand-stuffing / impersonation: the brand's name is stuffed into a
+       domain that is NOT that brand's real domain, e.g.
+       "paypal-security-verify.com" or "secure-paypal-login.net".
+       This is extremely common in real phishing and edit distance alone
+       cannot catch it, since the strings aren't "close" character-by-character.
+
+    Returns a dict {"type": "...", "brand": "...", "domain": "..."} or None.
+    """
+    registered = get_registered_domain(hostname)
+    if registered is None:
+        return None
+
     for brand in KNOWN_BRANDS:
-        distance = Levenshtein.distance(hostname, brand)
+        if registered == brand["domain"]:
+            # This is the real, legitimate domain — not impersonation.
+            return None
+
+        distance = Levenshtein.distance(registered, brand["domain"])
         if 0 < distance <= 2:
-            return brand
+            return {"type": "typosquat", "brand": brand["name"], "domain": brand["domain"]}
+
+        registered_sld = registered.split(".")[0]
+        if brand["core"] in registered_sld and registered_sld != brand["core"]:
+            return {"type": "impersonation", "brand": brand["name"], "domain": brand["domain"]}
+
     return None
 
-def calculate_risk_score(hostname_is_ip, has_keywords, is_punycode, typosquat_target):
+def calculate_risk_score(hostname_is_ip, has_keywords, is_punycode, brand_hit):
+    """
+    Weights reflect how strong each signal actually is on its own:
+
+    - Brand impersonation (typosquat or brand-stuffing) is the strongest
+      single signal a URL-only analysis can produce — a near-exact
+      misspelling or stuffed brand name in a domain someone doesn't own
+      is very rarely innocent. It alone should push a URL out of "LOW."
+    - IP-based hosting and punycode are strong secondary signals.
+    - Suspicious keywords alone are weak — "login" and "verify" appear
+      constantly in completely legitimate URLs, so this contributes least.
+
+    Even at maximum (all four signals firing at once), score caps at 100,
+    which lands as CRITICAL — appropriate, since that combination is
+    essentially never innocent.
+    """
     score = 0
     if hostname_is_ip:
-        score += 10
+        score += 15
     if has_keywords:
         score += 10
     if is_punycode:
-        score += 15
-    if typosquat_target is not None:
-        score += 25
-    return score
+        score += 20
+    if brand_hit is not None:
+        score += 45
+    return min(score, 100)
 
 def risk_level(score):
     if score < 25:
@@ -211,8 +292,8 @@ def analyze_single_url(url):
     ip_flag = is_ip_address(parsed.hostname)
     keyword_flag = has_suspicious_keywords(url)
     punycode_flag = has_punycode(parsed.hostname)
-    typosquat_target = check_typosquatting(parsed.hostname)
-    score = calculate_risk_score(ip_flag, keyword_flag, punycode_flag, typosquat_target)
+    brand_hit = check_brand_impersonation(parsed.hostname)
+    score = calculate_risk_score(ip_flag, keyword_flag, punycode_flag, brand_hit)
 
     return {
         "url": url,
@@ -220,7 +301,8 @@ def analyze_single_url(url):
         "hostname_is_ip": ip_flag,
         "has_suspicious_keywords": keyword_flag,
         "has_punycode": punycode_flag,
-        "typosquat_target": typosquat_target,
+        "brand_impersonation_type": brand_hit["type"] if brand_hit else None,
+        "brand_impersonation_target": brand_hit["brand"] if brand_hit else None,
         "risk_score": score,
         "risk_level": risk_level(score)
     }
