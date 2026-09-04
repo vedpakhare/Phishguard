@@ -25,7 +25,7 @@ Each check contributes to a weighted risk score (0–100), which maps to a plain
 
 ## Screenshot
 
-*(add a screenshot of the app here once you've got one you like)*
+![PhishGuard HIGH risk verdict](screenshots/screenshot.png)
 
 ## Tech stack
 
