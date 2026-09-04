@@ -1,0 +1,13 @@
+# Local database (contains real investigation data from your own machine)
+phishguard.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor/OS junk
+.vscode/
+.DS_Store
+Thumbs.db

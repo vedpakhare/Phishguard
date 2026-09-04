@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PhishGuard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+    :root {
+        --bg: #0b0e0d;
+        --panel: #141816;
+        --panel-border: #242a27;
+        --text: #eaeeec;
+        --text-muted: #8b958f;
+        --accent: #4fa98f;
+        --accent-soft: rgba(79, 169, 143, 0.12);
+
+        --low: #4ade80;    --low-bg: #12251a;    --low-border: #1f4430;
+        --medium: #fbbf24; --medium-bg: #2a2210; --medium-border: #4d3d14;
+        --high: #fb923c;   --high-bg: #2b1d10;   --high-border: #4d3218;
+        --critical: #f87171; --critical-bg: #2b1414; --critical-border: #4d1f1f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+        font-family: 'Inter', sans-serif;
+        background-color: var(--bg);
+        color: var(--text);
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 48px 24px 80px;
+        line-height: 1.5;
+    }
+
+    .masthead {
+        margin-bottom: 36px;
+    }
+
+    .masthead h1 {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 30px;
+        font-weight: 700;
+        margin: 0;
+        letter-spacing: -0.01em;
+    }
+
+    .masthead .tagline {
+        color: var(--text-muted);
+        font-size: 15px;
+        margin: 8px 0 0;
+        max-width: 46ch;
+    }
+
+    /* --- Case-file style tabs --- */
+    .case-tabs {
+        display: flex;
+        gap: 2px;
+    }
+
+    .case-tab {
+        font-family: 'Inter', sans-serif;
+        font-size: 14px;
+        font-weight: 500;
+        padding: 11px 20px;
+        background: var(--panel);
+        color: var(--text-muted);
+        border: 1px solid var(--panel-border);
+        border-bottom: none;
+        border-radius: 8px 8px 0 0;
+        cursor: pointer;
+        position: relative;
+        top: 1px;
+    }
+
+    .case-tab.active {
+        background: var(--panel);
+        color: var(--text);
+        border-color: var(--accent);
+        border-bottom: 1px solid var(--panel);
+    }
+
+    .panel {
+        display: none;
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 0 8px 8px 8px;
+        padding: 24px;
+    }
+
+    .panel.active {
+        display: block;
+    }
+
+    /* --- Intake row --- */
+    .intake {
+        display: flex;
+        gap: 10px;
+    }
+
+    input[type="text"] {
+        flex: 1;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 14px;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--panel-border);
+        border-radius: 6px;
+        padding: 12px 14px;
+    }
+
+    input[type="text"]:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    .file-drop {
+        flex: 1;
+        border: 1px dashed var(--panel-border);
+        border-radius: 6px;
+        padding: 12px 14px;
+        font-size: 14px;
+        color: var(--text-muted);
+    }
+
+    .file-drop input[type="file"] {
+        color: var(--text);
+        font-family: 'Inter', sans-serif;
+        font-size: 13px;
+        width: 100%;
+    }
+
+    .run-btn {
+        font-family: 'Inter', sans-serif;
+        font-size: 14px;
+        font-weight: 600;
+        background: var(--accent);
+        color: #06231b;
+        border: none;
+        border-radius: 6px;
+        padding: 0 20px;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .run-btn:disabled {
+        opacity: 0.6;
+        cursor: default;
+    }
+
+    .run-btn:hover:not(:disabled) {
+        filter: brightness(1.08);
+    }
+
+    /* --- Scan line loading state --- */
+    .scan-track {
+        height: 2px;
+        background: var(--panel-border);
+        border-radius: 2px;
+        margin-top: 16px;
+        overflow: hidden;
+        display: none;
+        position: relative;
+    }
+
+    .scan-track.active {
+        display: block;
+    }
+
+    .scan-track::after {
+        content: "";
+        position: absolute;
+        top: 0; left: 0;
+        width: 40%;
+        height: 100%;
+        background: var(--accent);
+        animation: sweep 1.1s ease-in-out infinite;
+    }
+
+    @keyframes sweep {
+        0%   { left: -40%; }
+        100% { left: 100%; }
+    }
+
+    .status-text {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 8px;
+        display: none;
+    }
+
+    .status-text.active { display: block; }
+
+    /* --- Result --- */
+    .result {
+        margin-top: 24px;
+        display: none;
+    }
+
+    .result.active { display: block; }
+
+    .verdict-banner {
+        border-left: 4px solid;
+        border-radius: 4px;
+        padding: 16px 18px;
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+    }
+
+    .verdict-banner .glyph {
+        font-size: 22px;
+        line-height: 1;
+        margin-top: 2px;
+    }
+
+    .verdict-banner h2 {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 18px;
+        margin: 0 0 4px;
+    }
+
+    .verdict-banner p {
+        margin: 0;
+        font-size: 14px;
+        color: var(--text-muted);
+    }
+
+    .LOW      { background: var(--low-bg);      border-color: var(--low); }
+    .MEDIUM   { background: var(--medium-bg);   border-color: var(--medium); }
+    .HIGH     { background: var(--high-bg);     border-color: var(--high); }
+    .CRITICAL { background: var(--critical-bg); border-color: var(--critical); }
+
+    .LOW h2      { color: var(--low); }
+    .MEDIUM h2   { color: var(--medium); }
+    .HIGH h2     { color: var(--high); }
+    .CRITICAL h2 { color: var(--critical); }
+
+    .meta-line {
+        font-size: 13px;
+        color: var(--text-muted);
+        margin: 14px 0 0;
+    }
+
+    .meta-line strong {
+        color: var(--text);
+        font-weight: 500;
+    }
+
+    .toggle-link {
+        font-family: 'JetBrains Mono', monospace;
+        color: var(--accent);
+        cursor: pointer;
+        font-size: 12px;
+        display: inline-block;
+        margin-top: 16px;
+        border-bottom: 1px dotted var(--accent);
+    }
+
+    .technical-details {
+        display: none;
+        margin-top: 14px;
+        border-top: 1px solid var(--panel-border);
+        padding-top: 14px;
+    }
+
+    /* --- Evidence log list --- */
+    .evidence-log {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .evidence-log li {
+        display: flex;
+        gap: 10px;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--panel-border);
+        font-size: 13.5px;
+    }
+
+    .evidence-log li:last-child { border-bottom: none; }
+
+    .evidence-log .mark {
+        font-family: 'JetBrains Mono', monospace;
+        flex-shrink: 0;
+        width: 16px;
+    }
+
+    .evidence-log li > span:last-child {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .row-label {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .evidence-log .flagged .mark { color: var(--high); }
+    .evidence-log .clean .mark { color: var(--low); }
+    .evidence-log .clean span:last-child { color: var(--text-muted); }
+
+    .url-log li {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        word-break: break-all;
+    }
+
+    .raw-score {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: var(--text-muted);
+        margin: 14px 0 0;
+    }
+
+    .reset-link {
+        font-family: 'Inter', sans-serif;
+        font-size: 13px;
+        color: var(--text-muted);
+        cursor: pointer;
+        text-decoration: underline;
+        display: inline-block;
+        margin-top: 18px;
+    }
+</style>
+</head>
+<body>
+
+    <div class="masthead">
+        <h1>PhishGuard</h1>
+        <p class="tagline">Paste a link or drop in an email. We'll investigate it and give you a plain answer.</p>
+    </div>
+
+    <div class="case-tabs">
+        <button class="case-tab active" id="urlTabButton" onclick="switchTab('url')">Check a link</button>
+        <button class="case-tab" id="emailTabButton" onclick="switchTab('email')">Scan an email</button>
+        <button class="case-tab" id="historyTabButton" onclick="switchTab('history')">History</button>
+    </div>
+
+    <!-- URL PANEL -->
+    <div class="panel active" id="urlPanel">
+        <div class="intake">
+            <input type="text" id="urlInput" placeholder="https://example.com/login">
+            <button class="run-btn" id="urlRunBtn" onclick="investigateUrl()">Check</button>
+        </div>
+        <div class="scan-track" id="urlScanTrack"></div>
+        <div class="status-text" id="urlStatusText">ANALYZING LINK…</div>
+
+        <div class="result" id="resultBox">
+            <div class="verdict-banner" id="verdictBanner">
+                <div class="glyph" id="verdictGlyph"></div>
+                <div>
+                    <h2 id="verdictHeadline"></h2>
+                    <p id="verdictExplanation"></p>
+                </div>
+            </div>
+
+            <p class="meta-line"><strong>Domain checked:</strong> <span id="hostnameText"></span></p>
+
+            <span class="toggle-link" onclick="toggleDetails('technicalDetails', 'toggleLink')" id="toggleLink">show technical details</span>
+
+            <div class="technical-details" id="technicalDetails">
+                <ul class="evidence-log" id="findingsList"></ul>
+                <p class="raw-score" id="rawScoreText"></p>
+            </div>
+
+            <span class="reset-link" onclick="resetUrl()">Check another link</span>
+        </div>
+    </div>
+
+    <!-- EMAIL PANEL -->
+    <div class="panel" id="emailPanel">
+        <div class="intake">
+            <div class="file-drop">
+                <input type="file" id="emailInput" accept=".eml">
+            </div>
+            <button class="run-btn" id="emailRunBtn" onclick="investigateEmail()">Scan</button>
+        </div>
+        <div class="scan-track" id="emailScanTrack"></div>
+        <div class="status-text" id="emailStatusText">ANALYZING EMAIL…</div>
+
+        <div class="result" id="emailResultBox">
+            <div class="verdict-banner" id="emailVerdictBanner">
+                <div class="glyph" id="emailVerdictGlyph"></div>
+                <div>
+                    <h2 id="emailVerdictHeadline"></h2>
+                    <p id="emailVerdictExplanation"></p>
+                </div>
+            </div>
+
+            <p class="meta-line"><strong>Claims to be from:</strong> <span id="emailFromText"></span></p>
+            <p class="meta-line"><strong>Subject:</strong> <span id="emailSubjectText"></span></p>
+
+            <span class="toggle-link" onclick="toggleDetails('emailTechnicalDetails', 'emailToggleLink')" id="emailToggleLink">show technical details</span>
+
+            <div class="technical-details" id="emailTechnicalDetails">
+                <ul class="evidence-log" id="emailFindingsList"></ul>
+
+                <p class="meta-line" style="margin-top:16px;"><strong>Links found in this email</strong></p>
+                <ul class="evidence-log url-log" id="emailUrlList"></ul>
+
+                <p class="raw-score" id="emailRawScoreText"></p>
+            </div>
+
+            <span class="reset-link" onclick="resetEmail()">Scan another email</span>
+        </div>
+    </div>
+
+    <!-- HISTORY PANEL -->
+    <div class="panel" id="historyPanel">
+        <p class="meta-line" style="margin-top:0;">Past investigations, stored locally on this machine.</p>
+        <ul class="evidence-log" id="historyList" style="margin-top:14px;"></ul>
+    </div>
+
+<script>
+    const API_BASE = "http://127.0.0.1:8000";
+
+    const VERDICT_TEXT = {
+        LOW:      { glyph: "✓", headline: "This looks safe",      explanation: "No common warning signs found. Still worth a second look before entering passwords or personal info." },
+        MEDIUM:   { glyph: "!", headline: "Be cautious",          explanation: "A couple of things stood out. It might be fine, but proceed carefully." },
+        HIGH:     { glyph: "▲", headline: "This looks risky",     explanation: "Several warning signs were found. We'd avoid entering any personal information." },
+        CRITICAL: { glyph: "✕", headline: "This looks dangerous", explanation: "Strong signs of phishing. We'd strongly recommend avoiding this." }
+    };
+
+    function switchTab(tab) {
+        document.getElementById("urlPanel").classList.toggle("active", tab === "url");
+        document.getElementById("emailPanel").classList.toggle("active", tab === "email");
+        document.getElementById("historyPanel").classList.toggle("active", tab === "history");
+        document.getElementById("urlTabButton").classList.toggle("active", tab === "url");
+        document.getElementById("emailTabButton").classList.toggle("active", tab === "email");
+        document.getElementById("historyTabButton").classList.toggle("active", tab === "history");
+
+        if (tab === "history") {
+            loadHistory();
+        }
+    }
+
+    async function loadHistory() {
+        const list = document.getElementById("historyList");
+        list.innerHTML = "<li><span class=\"mark\">\u2026</span><span>Loading\u2026</span></li>";
+
+        const response = await fetch(API_BASE + "/api/investigations");
+        const items = await response.json();
+
+        list.innerHTML = "";
+
+        if (items.length === 0) {
+            list.innerHTML = "<li class=\"clean\"><span class=\"mark\">\u2013</span><span>Nothing checked yet.</span></li>";
+            return;
+        }
+
+        items.forEach(function (item) {
+            const li = document.createElement("li");
+            li.className = item.risk_level === "LOW" ? "clean" : "flagged";
+
+            const mark = document.createElement("span");
+            mark.className = "mark";
+            mark.textContent = item.type === "url" ? "\u2197" : "\u2709";
+
+            const label = document.createElement("span");
+            const when = new Date(item.created_at).toLocaleString();
+            label.innerHTML = "<strong>[" + item.risk_level + "]</strong> " + item.target +
+                "  <span style=\"color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 11px;\">" + when + "</span>";
+
+            li.appendChild(mark);
+            li.appendChild(label);
+            list.appendChild(li);
+        });
+    }
+
+    function toggleDetails(detailsId, linkId) {
+        const details = document.getElementById(detailsId);
+        const link = document.getElementById(linkId);
+        const showing = details.style.display === "block";
+        details.style.display = showing ? "none" : "block";
+        link.textContent = showing ? "show technical details" : "hide technical details";
+    }
+
+    function fillFindingsList(listId, findings, cleanMessage) {
+        const list = document.getElementById(listId);
+        list.innerHTML = "";
+
+        const flagged = findings.filter(function (f) { return f.flagged; });
+
+        if (flagged.length === 0) {
+            const li = document.createElement("li");
+            li.className = "clean";
+            const mark = document.createElement("span");
+            mark.className = "mark";
+            mark.textContent = "\u2713";
+            const label = document.createElement("span");
+            label.textContent = cleanMessage + " (" + findings.length + " checks run)";
+            li.appendChild(mark);
+            li.appendChild(label);
+            list.appendChild(li);
+            return;
+        }
+
+        flagged.forEach(function (finding) {
+            const li = document.createElement("li");
+            li.className = "flagged";
+            const mark = document.createElement("span");
+            mark.className = "mark";
+            mark.textContent = "!";
+            const label = document.createElement("span");
+            label.textContent = finding.label;
+            li.appendChild(mark);
+            li.appendChild(label);
+            list.appendChild(li);
+        });
+    }
+
+    function setLoading(prefix, isLoading) {
+        document.getElementById(prefix + "RunBtn").disabled = isLoading;
+        document.getElementById(prefix + "ScanTrack").classList.toggle("active", isLoading);
+        document.getElementById(prefix + "StatusText").classList.toggle("active", isLoading);
+    }
+
+    // ---------- URL FLOW ----------
+
+    async function investigateUrl() {
+        const url = document.getElementById("urlInput").value.trim();
+        if (!url) return;
+
+        setLoading("url", true);
+        document.getElementById("resultBox").classList.remove("active");
+
+        try {
+            const response = await fetch(API_BASE + "/api/investigations/url", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: url })
+            });
+            const data = await response.json();
+            renderUrlResult(data);
+        } finally {
+            setLoading("url", false);
+        }
+    }
+
+    function renderUrlResult(data) {
+        document.getElementById("resultBox").classList.add("active");
+
+        const banner = document.getElementById("verdictBanner");
+        banner.className = "verdict-banner " + data.risk_level;
+
+        const info = VERDICT_TEXT[data.risk_level];
+        document.getElementById("verdictGlyph").textContent = info.glyph;
+        document.getElementById("verdictHeadline").textContent = info.headline;
+        document.getElementById("verdictExplanation").textContent = info.explanation;
+        document.getElementById("hostnameText").textContent = data.hostname;
+        document.getElementById("rawScoreText").textContent =
+            "risk_score: " + data.risk_score + "/100  ·  risk_level: " + data.risk_level;
+
+        fillFindingsList("findingsList", [
+            { label: "The address uses a raw number (IP address) instead of a normal web name.", flagged: data.hostname_is_ip },
+            { label: "The link contains words often used to trick people, like \u201clogin\u201d or \u201cverify\u201d.", flagged: data.has_suspicious_keywords },
+            { label: "The web address uses hidden character encoding that can disguise its real identity.", flagged: data.has_punycode },
+            {
+                label: data.typosquat_target
+                    ? "This address looks very similar to the real site \u201c" + data.typosquat_target + "\u201d \u2014 it may be an impersonation."
+                    : "The address doesn't closely resemble any well-known brand we checked.",
+                flagged: data.typosquat_target !== null
+            }
+        ], "No warning signs found on this link.");
+
+        document.getElementById("technicalDetails").style.display = "none";
+        document.getElementById("toggleLink").textContent = "show technical details";
+    }
+
+    function resetUrl() {
+        document.getElementById("urlInput").value = "";
+        document.getElementById("resultBox").classList.remove("active");
+        document.getElementById("urlInput").focus();
+    }
+
+    // ---------- EMAIL FLOW ----------
+
+    async function investigateEmail() {
+        const fileInput = document.getElementById("emailInput");
+        if (!fileInput.files.length) {
+            alert("Choose an .eml file first.");
+            return;
+        }
+
+        setLoading("email", true);
+        document.getElementById("emailResultBox").classList.remove("active");
+
+        const formData = new FormData();
+        formData.append("file", fileInput.files[0]);
+
+        try {
+            const response = await fetch(API_BASE + "/api/investigations/email", {
+                method: "POST",
+                body: formData
+            });
+            const data = await response.json();
+            renderEmailResult(data);
+        } finally {
+            setLoading("email", false);
+        }
+    }
+
+    function renderEmailResult(data) {
+        document.getElementById("emailResultBox").classList.add("active");
+
+        const banner = document.getElementById("emailVerdictBanner");
+        banner.className = "verdict-banner " + data.risk_level;
+
+        const info = VERDICT_TEXT[data.risk_level];
+        document.getElementById("emailVerdictGlyph").textContent = info.glyph;
+        document.getElementById("emailVerdictHeadline").textContent = info.headline;
+        document.getElementById("emailVerdictExplanation").textContent = info.explanation;
+        document.getElementById("emailFromText").textContent = data.from;
+        document.getElementById("emailSubjectText").textContent = data.subject;
+
+        fillFindingsList("emailFindingsList", [
+            { label: "The reply address doesn't match the sender's real domain.", flagged: data.reply_to_mismatch },
+            { label: "This email failed checks that verify it really came from who it claims.", flagged: data.auth_failure }
+        ], "No warning signs found on the sender or authentication.");
+
+        const urlList = document.getElementById("emailUrlList");
+        urlList.innerHTML = "";
+        const riskyUrls = data.urls.filter(function (u) { return u.risk_level !== "LOW"; });
+
+        function addUrlRow(mark, className, text) {
+            const li = document.createElement("li");
+            li.className = className;
+            const m = document.createElement("span");
+            m.className = "mark";
+            m.textContent = mark;
+            const label = document.createElement("span");
+            label.textContent = text;
+            li.appendChild(m);
+            li.appendChild(label);
+            urlList.appendChild(li);
+        }
+
+        if (data.urls.length === 0) {
+            addUrlRow("\u2013", "clean", "No links found in this email.");
+        } else if (riskyUrls.length === 0) {
+            addUrlRow("\u2713", "clean", "All " + data.urls.length + " link(s) found look clean.");
+        } else {
+            riskyUrls.forEach(function (u) {
+                addUrlRow("!", "flagged", "[" + u.risk_level + "] " + u.url);
+            });
+        }
+
+        document.getElementById("emailRawScoreText").textContent =
+            "risk_score: " + data.risk_score + "/100  ·  spf: " + data.spf + "  ·  dkim: " + data.dkim + "  ·  dmarc: " + data.dmarc;
+
+        document.getElementById("emailTechnicalDetails").style.display = "none";
+        document.getElementById("emailToggleLink").textContent = "show technical details";
+    }
+
+    function resetEmail() {
+        document.getElementById("emailInput").value = "";
+        document.getElementById("emailResultBox").classList.remove("active");
+    }
+</script>
+</body>
+</html>
